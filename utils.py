@@ -3,6 +3,7 @@ import numpy as np
 from sklearn.metrics import mean_squared_error
 from tqdm import tqdm
 import torch
+import gc
 
 
 def normalize_dataframe(df: pl.DataFrame, means: dict, stds: dict) -> pl.DataFrame:
@@ -67,7 +68,7 @@ def r2_score(y_true, y_pred, weights):
     return r2_score
 
 
-def train_model(model, encoder,loader, optimizer, loss_function, device):
+def train_model(model, encoder,loader, optimizer, loss_function, device,encoder_input=False):
     model.train() #set model to training mode
     total_loss = 0
     all_probs = []
@@ -114,9 +115,11 @@ def train_model(model, encoder,loader, optimizer, loss_function, device):
     r2 = r2_score(all_targets, all_probs, all_weights)
 
     avg_loss = total_loss / len(loader)
+    del all_probs,all_targets,all_weights,outputs,total_loss
+    gc.collect()
     return avg_loss, mse, r2
 
-def evaluate_model(model, encoder,loader,generate_preds = False):
+def evaluate_model(model, encoder,loader,generate_preds = False,encoder_input=False):
     model.eval()
     all_probs = []
     all_targets = []
@@ -139,10 +142,87 @@ def evaluate_model(model, encoder,loader,generate_preds = False):
     all_weights = torch.cat(all_weights).numpy()
     
     mse = mean_squared_error(all_targets, all_probs, sample_weight=all_weights)
+    
     r2 = r2_score(all_targets, all_probs, all_weights)
+    del all_probs,all_targets,all_weights,outputs
+    gc.collect()
     print(f"Total Loss val: {mse:.4f} r2 {r2}")
     if generate_preds:
         return all_targets,all_probs,mse,r2
     return mse, r2
 
+from sklearn.metrics import mean_squared_error
+def train_ae(model, loader, optimizer, loss_function, device):
+    model.train() #set model to training mode
+    #Iterate over batches 
+    total_loss = 0
+    all_probs = []
+    all_targets = []
+    all_weights = []
+    progress_bar = tqdm(loader, desc="Training Progress", leave=True,position =0)
+    for X_batch, y_batch, weights_batch in progress_bar:
+        #Move data to specified device (CPU or GPU)
+        # X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+        # weights_batch = weights_batch.to(device)
+        #Reset Gradient to 0
+        optimizer.zero_grad()
+        # print(batch_time.shape,batch_date.shape)
+        _,outputs = model(X_batch)
+        outputs = outputs
+        loss_per_sample = loss_function(outputs, X_batch)
+        # weights_batch = weights_batch.unsqueeze(1)
+        weighted_loss = loss_per_sample*weights_batch.unsqueeze(1)
+        #Compute average loss across the batch
+        loss = weighted_loss.mean()
+        # print(f"Batch Loss: {loss.item():.4f}")
+        progress_bar.set_postfix({"Batch Loss": f"{loss.item():.4f}"})
 
+        loss.backward()
+        # print(f"Batch Loss: {loss.item():.4f}")
+       
+        optimizer.step()
+
+        total_loss += loss.item()
+
+        all_probs.append(outputs.detach().cpu())
+        all_targets.append(X_batch.cpu())
+        all_weights.append(weights_batch.cpu())
+
+    all_probs = torch.cat(all_probs).numpy()
+    all_targets = torch.cat(all_targets).numpy()
+    all_weights = torch.cat(all_weights).numpy()
+    mse = mean_squared_error(all_targets, all_probs)
+    avg_loss = total_loss / len(loader)
+    return  avg_loss,mse
+
+
+
+def evaluate_ae(model, loader, device):
+    model.eval() #set model to training mode
+    #Iterate over batches 
+    progress_bar = tqdm(loader, desc="Validating Progress", leave=True,position =0)
+    total_loss = 0
+    all_probs = []
+    all_targets = []
+    all_weights = []
+    with torch.no_grad():
+        for X_batch, y_batch, weights_batch in progress_bar:
+            #Move data to specified device (CPU or GPU)
+            # X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            # weights_batch = weights_batch.to(device)
+            #Reset Gradient to 0
+            # print(batch_time.shape,batch_date.shape)
+            _,outputs = model(X_batch,training = False)
+            outputs = outputs
+           
+    
+            all_probs.append(outputs.detach().cpu())
+            all_targets.append(X_batch.cpu())
+            all_weights.append(weights_batch.cpu())
+
+    all_probs = torch.cat(all_probs).numpy()
+    all_targets = torch.cat(all_targets).numpy()
+    all_weights = torch.cat(all_weights).numpy()
+    mse = mean_squared_error(all_targets, all_probs, sample_weight=all_weights)
+
+    return mse

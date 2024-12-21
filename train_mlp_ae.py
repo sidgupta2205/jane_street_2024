@@ -5,7 +5,6 @@ import pandas as pd
 import numpy as np
 import statistics as stat
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import roc_auc_score
 import copy
 from torch.utils.data import TensorDataset, DataLoader
 from torch.utils.data import Dataset
@@ -18,6 +17,7 @@ import gc
 from utils import *
 from models import *
 
+random.seed(4)
 model_save_dir = '/home/siddharth/jane_street_challenge_2024/models'
 jane_street_real_time_market_data_forecasting_path = '/home/siddharth/jane_street_challenge_2024/data'
 load_model = True
@@ -25,11 +25,17 @@ evaluate = False
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 mlp = MLP()
 mlp = mlp.to(device)
-model_name = "torchcustomwithencoder"
+encoder = AutoEncoder()
+encoder = encoder.to(device)
+if load_model:
+    encoder.load_state_dict(torch.load(f'{model_save_dir}/encoder.pth',weights_only=True))
+    print("encoder Model loaded")
+model = CombinedModel(encoder,mlp)
+model_name = "torchcustomwithencoder_freeze_with_std_0.2"
 # load model if present in dir and flag is set
-
+optimizer = optim.Adam(model.parameters(), lr=1e-3) #Adam optimizer
 loss_function = nn.MSELoss(reduction='none')
-epochs = 10
+epochs = 30
 best = float('-inf')
 degraded = 0
 batch_size = 4096
@@ -55,16 +61,8 @@ test_dataset = CustomDataset(test_X, test_y, test_weights)
 test_loader = DataLoader(test_dataset, batch_size=batch_size,shuffle=False)
 del X_test,y_test,weights_test
 
-sample_size = 250
+sample_size = 200
 for i in range(0,iterations,sample_size):
-    degraded = 0
-    
-
-    if load_model and best<0.06:
-        mlp.load_state_dict(torch.load(f'{model_save_dir}/{model_name}_400_iteration.pth',weights_only=True))
-        print("Model loaded for iteration",i)
-        optimizer = optim.Adam(mlp.parameters(), lr=1e-4) #Adam optimizer
-    best = float('-inf')
 
     selected_date_ids = unique_date_ids[i:i+sample_size]
     # # Separate dates 1690 to 1698 for the test set
@@ -93,19 +91,19 @@ for i in range(0,iterations,sample_size):
     gc.collect()
     train_dataset = CustomDataset(train_X, train_y,train_weights)
     train_loader = DataLoader(train_dataset, batch_size=batch_size,shuffle=True)
-    best_model = mlp
+    best_model = model
     print(f"Training on {len(train_date_ids)} date_ids")
     if evaluate:
-        targets,probs,val_mse, val_r2 = evaluate_model(mlp,None, test_loader,generate_preds=evaluate)
+        targets,probs,val_mse, val_r2 = evaluate_model(model,None, test_loader,generate_preds=evaluate)
     else:
         for epoch in range(epochs):
-            train_loss, train_mse, train_r2 = train_model(mlp,None, train_loader, optimizer, loss_function, device)
-            val_mse, val_r2 = evaluate_model(mlp,None, test_loader)
+            train_loss, train_mse, train_r2 = train_model(model,None, train_loader, optimizer, loss_function, device)
+            val_mse, val_r2 = evaluate_model(model,None, test_loader)
         
             print(f'epoch {epoch} train loss {train_loss:.4f}, train_r2 {train_r2:.4f}, train_mse {train_mse:.4f}, val_mse {val_mse:.4f}, val_r2 {val_r2:.4f}')
             if val_r2 > best:
                 best = val_r2
-                best_model = copy.deepcopy(mlp)
+                best_model = copy.deepcopy(model)
                 torch.save(best_model.state_dict(), f'{model_save_dir}/{model_name}_iter{i}.pth')
                 print(f"Model saved at {model_save_dir}/{model_name}.pth iteration {i} with val_mse {best}")
                 degraded = 0
