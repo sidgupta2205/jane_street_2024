@@ -67,7 +67,7 @@ class MLP(nn.Module):
             nn.Linear(192, 16),
             # nn.BatchNorm1d(64),
             nn.Tanh(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.5),
             nn.Linear(16, 1)  # Swish activation
             # nn.Dropout(0.2),
             
@@ -79,6 +79,7 @@ class MLP(nn.Module):
         if encoder_input:
             x = self.encoder_to_mlp(x)
         return self.mlp(x)*5
+        
     
 # Model with combining mlp and autorncoder where the encoder is freezed
 class CombinedModel(nn.Module):

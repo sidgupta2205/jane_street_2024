@@ -19,12 +19,12 @@ from models import *
 
 model_save_dir = '/home/siddharth/jane_street_challenge_2024/models'
 jane_street_real_time_market_data_forecasting_path = '/home/siddharth/jane_street_challenge_2024/data'
-load_model = False
+load_model = True
 evaluate = False
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = AutoEncoder()
 model = model.to(device)
-model_name = "encoder"
+model_name = "encoder_v2"
 # load model if present in dir and flag is set
 if load_model:
     model.load_state_dict(torch.load(f'{model_save_dir}/{model_name}.pth',weights_only=True))
@@ -100,6 +100,7 @@ for i in range(0,iterations,200):
             val_mse  = evaluate_ae(model,test_loader,device)
         
             print(f'epoch {epoch} train loss {train_loss:.4f}, train_mse {train_mse:.4f}, val_mse {val_mse:.4f}')
+            del train_loss, train_mse
             if val_mse < best:
                 best = val_mse
                 best_model = copy.deepcopy(model)
@@ -111,4 +112,5 @@ for i in range(0,iterations,200):
                 degraded += 1
             if degraded > 5:
                 break
+            del val_mse
 

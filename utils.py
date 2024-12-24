@@ -5,6 +5,13 @@ from tqdm import tqdm
 import torch
 import gc
 
+class CONFIG:
+    target_col = "responder_6"
+    lag_cols_original = ["date_id", "symbol_id"] + [f"responder_{idx}" for idx in range(9)]
+    lag_cols_rename = { f"responder_{idx}" : f"responder_{idx}_lag_1" for idx in range(9)}
+    valid_ratio = 0.05
+    start_dt = 800
+
 
 def normalize_dataframe(df: pl.DataFrame, means: dict, stds: dict) -> pl.DataFrame:
     # We normalize the polars dataframe using the provided means and standard deviations
@@ -28,26 +35,74 @@ def convert_to_vector(date_ids, time_ids):
     time_ids = np.array(time_ids).reshape(-1, 1)
     # print(date_ids)/
     # print(data_ids.shape)
-    date_vectors = np.hstack((date_ids / 30, date_ids / 12, date_ids / 365))
+    date_vectors = np.hstack((date_ids // 30, date_ids // 12, date_ids // 365))
     # print(date_vectors)
     # print("hrerer")
-    time_vectors = np.hstack((time_ids / 16, time_ids / 60, time_ids / 360))
-    
+    time_vectors = np.hstack((time_ids // 16, time_ids // 60, time_ids // 360))
+
+    del date_ids,time_ids
+    gc.collect()
+    # convert to int
+    date_vectors = date_vectors.astype(int)
+    time_vectors = time_vectors.astype(int)
     return date_vectors, time_vectors
 
-def get_features(train):
+def get_features_with_time(train):
     feature_names = [f"feature_{i:02d}" for i in range(79)]
     train_features = train.select(feature_names)
     train_features = train_features.fill_null(strategy='forward').fill_null(0)
+    # add date and time vectors in features
+    date_ids = train.select('date_id').to_numpy().reshape(-1)
+    time_ids = train.select('time_id').to_numpy().reshape(-1)
     
-    # date_ids,time_ids = convert_to_vector(date_ids, time_ids)
+    date_vector,time_vectors = convert_to_vector(date_ids, time_ids)
+    del date_ids,time_ids
+    gc.collect()
+    # print("Hrere")
     # train_features = normalize_dataframe(train_features,means,stds)
     X = train_features.to_numpy()
+    # print("Hreredsd")
+    X = np.hstack((X,date_vector,time_vectors))
     del train_features
     y = train.select('responder_6').to_numpy().reshape(-1)
     weights = train.select('weight').to_numpy().reshape(-1)
 
     return X,y,weights
+
+
+
+def get_features(train):
+    feature_names = [f"feature_{i:02d}" for i in range(79)]
+    train_features = train.select(feature_names)
+    train_features = train_features.fill_null(strategy='forward').fill_null(0)
+    # add date and time vectors in features
+    X = train_features.to_numpy()
+    
+    del train_features
+    y = train.select('responder_6').to_numpy().reshape(-1)
+    weights = train.select('weight').to_numpy().reshape(-1)
+
+    return X,y,weights
+
+def get_lags(train):
+    lags = train.select(pl.col(CONFIG.lag_cols_original))
+    lags = lags.rename(CONFIG.lag_cols_rename)
+    lags = lags.with_columns(
+        date_id = pl.col('date_id') + 1,  # lagged by 1 day
+        )
+    lags = lags.group_by(["date_id", "symbol_id"], maintain_order=True).last()  # pick up last record of previous date
+    train = train.join(lags, on=["date_id", "symbol_id"],  how="left")
+    X,y,weights = get_features(train)
+    # select responder_0_lag_1 to responder_8_lag_1 from train and concat it in X
+    lag_cols = [f"responder_{idx}_lag_1" for idx in range(9)]
+    lag_features = train.select(lag_cols)
+    lag_features = lag_features.fill_null(strategy='forward').fill_null(0)
+    lag_features = lag_features.to_numpy()
+    X = np.hstack((X, lag_features))
+    
+    return X,y,weights
+
+
 
 def r2_score(y_true, y_pred, weights):
     """
@@ -103,6 +158,8 @@ def train_model(model, encoder,loader, optimizer, loss_function, device,encoder_
         optimizer.step()
 
         total_loss += loss.item()
+        del loss_per_sample,weighted_loss
+        gc.collect()
 
         all_probs.append(outputs.detach().cpu())
         all_targets.append(y_batch.cpu())
